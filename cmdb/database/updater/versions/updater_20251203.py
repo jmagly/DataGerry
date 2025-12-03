@@ -20,8 +20,6 @@ import logging
 
 from cmdb.database.updater.base_database_update import BaseDatabaseUpdate
 
-from cmdb.models.object_model import CmdbObject
-from cmdb.models.type_model import CmdbType
 from cmdb.models.ci_explorer_model import CmdbCiExplorerProfile
 
 from cmdb.errors.updater import UpdaterException
