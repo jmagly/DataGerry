@@ -137,10 +137,10 @@ export class ConnectionService {
 
   /**
    * Builds a URL from the given protocol, host, and port.
-   * @param protocol 
-   * @param host 
-   * @param port 
-   * @returns 
+   * @param protocol
+   * @param host
+   * @param port
+   * @returns
    */
   private buildUrl(protocol: string, host: string, port: number): string {
     const h = host.replace(/^https?:\/\//, '');
@@ -149,20 +149,47 @@ export class ConnectionService {
       : `${protocol}://${h}`;
   }
 
+  /**
+   * Builds a URL, omitting port if it's the default for the protocol (80/443).
+   * This allows same-origin detection behind reverse proxies.
+   */
+  private buildUrlWithOptionalPort(protocol: string, host: string, port: number): string {
+    const h = host.replace(/^https?:\/\//, '');
+    const isDefaultPort = (protocol === 'https' && port === 443) ||
+                          (protocol === 'http' && port === 80);
+    return isDefaultPort
+      ? `${protocol}://${h}`
+      : `${protocol}://${h}:${port}`;
+  }
+
 
   /**
    * Injects a local default connection URL into local storage and updates the connection observable.
+   * Tries same-origin first (for reverse proxy setups), then falls back to port 4000.
    */
-  private injectLocalDefault(): void {
+  private async injectLocalDefault(): Promise<void> {
     const protocol = window.location.protocol.replace(':', '');
     const hostname = window.location.hostname;
-    const port = this.LOCAL_DEFAULT_PORT;
+    const currentPort = window.location.port
+      ? parseInt(window.location.port, 10)
+      : (protocol === 'https' ? 443 : 80);
 
-    const url = this.buildUrl(protocol, hostname, port);
+    // First try same-origin (works behind reverse proxy)
+    const sameOriginUrl = this.buildUrlWithOptionalPort(protocol, hostname, currentPort);
+    try {
+      await this.connectTo(sameOriginUrl);
+      localStorage.setItem('connection', JSON.stringify(sameOriginUrl));
+      this.connection$.next(sameOriginUrl);
+      this.connectionStatus = true;
+      return;
+    } catch {
+      // Same-origin failed, fall back to port 4000
+    }
 
-    localStorage.setItem('connection', JSON.stringify(url));
-    this.connection$.next(url);
-
+    // Fall back to default port 4000 (direct access without proxy)
+    const fallbackUrl = this.buildUrl(protocol, hostname, this.LOCAL_DEFAULT_PORT);
+    localStorage.setItem('connection', JSON.stringify(fallbackUrl));
+    this.connection$.next(fallbackUrl);
     this.validateAsync();
   }
 
