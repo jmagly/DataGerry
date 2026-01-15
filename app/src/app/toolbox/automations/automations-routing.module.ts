@@ -22,7 +22,7 @@ import { AutomationsComponent } from './automations.component';
 import { AutomationsListComponent } from './components/automations-list/automations-list.component';
 import { AutomationFormComponent } from './components/automation-form/automation-form.component';
 import { AuthGuard } from 'src/app/modules/auth/guards/auth.guard';
-import { cloudModeGuard } from 'src/app/modules/auth/guards/cloud-mode.guard';
+import { ConnectorFormComponent } from '../connectors/components/connector-form/connector-form.component';
 
 const routes: Routes = [
   {
@@ -36,7 +36,7 @@ const routes: Routes = [
       {
         path: '',
         component: AutomationsListComponent,
-        canActivate: [AuthGuard, cloudModeGuard],
+        canActivate: [AuthGuard],
         data: {
           right: 'automation.view',
           breadcrumb: 'Automations'
@@ -45,7 +45,7 @@ const routes: Routes = [
       {
         path: 'add',
         component: AutomationFormComponent,
-        canActivate: [AuthGuard, cloudModeGuard],
+        canActivate: [AuthGuard],
         data: {
           right: 'automation.create',
           breadcrumb: 'Create Automation',
@@ -55,13 +55,18 @@ const routes: Routes = [
       {
         path: 'edit/:schedulerId',
         component: AutomationFormComponent,
-        canActivate: [AuthGuard, cloudModeGuard],
+        canActivate: [AuthGuard],
         data: {
           right: 'automation.edit',
           breadcrumb: 'Edit Automation',
           mode: 'edit'
         }
-      }
+      },
+            {
+              path: 'internal',
+              component: ConnectorFormComponent,
+              data: { mode: 'internal', breadcrumb: 'DataGerry API Credentials' }
+            }
     ]
   }
 ];

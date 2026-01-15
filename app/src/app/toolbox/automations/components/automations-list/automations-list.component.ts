@@ -22,6 +22,9 @@ import { AutomationsService } from '../../services/automations.service';
 import { ToastService } from 'src/app/layout/toast/toast.service';
 import { LoaderService } from 'src/app/core/services/loader.service';
 import { DeleteModalService } from 'src/app/core/services/delete-modal.service';
+import { ConnectorsService } from 'src/app/toolbox/connectors/services/connectors.service';
+import { finalize } from 'rxjs';
+import { environment } from 'src/environments/environment';
 
 @Component({
   selector: 'app-automations-list',
@@ -48,6 +51,7 @@ export class AutomationsListComponent implements OnInit {
   public isExecuting: string | null = null;
 
   constructor(
+    private svc: ConnectorsService,
     private automationsService: AutomationsService,
     private router: Router,
     private toast: ToastService,
@@ -123,14 +127,17 @@ export class AutomationsListComponent implements OnInit {
     this.loading = true;
     this.loaderService.show();
 
-    this.automationsService.getAutomations().subscribe({
+    this.automationsService?.getAutomations()?.subscribe({
       next: (automations) => {
         // Map automations to add direction information
-        this.automations = automations.map(automation => ({
+        const list = Array.isArray(automations) ? automations : [];
+
+        this.automations = list?.map(automation => ({
           ...automation,
           direction: this.getDirection(automation)
         }));
-        this.totalAutomations = automations.length;
+      
+        this.totalAutomations = list?.length;
         this.loading = false;
         this.loaderService.hide();
       },
@@ -142,10 +149,36 @@ export class AutomationsListComponent implements OnInit {
     });
   }
 
+    configInternal(): void {
+      this.loaderService.show();
+      this.svc.checkConnectorExists('DataGerryInternal')
+        .pipe(finalize(() => this.loaderService.hide()))
+        .subscribe({
+          next: (exists: boolean) => {
+            // Redirect to internal route without resolver
+            this.router.navigate(['automations/internal'], {
+              state: { 
+                connectorExists: exists,
+                connector: {
+                  title: 'DataGerryInternal',
+                  description: 'Internal DATAGerry connector for automations',
+          invoker: { name: environment.cloudMode ? 'DataGerryCloud' : 'DataGerry' },
+                  sslCert: false,
+                  timeout: 1000
+                }
+              }
+            });
+          },
+          error: (err) => {
+            this.toast.error(err?.error?.message);
+          }
+        });
+    }
+
 
   private getDirection(automation: any): string {
-    const fromConnector = automation.connection?.fromConnector;
-    const toConnector = automation.connection?.toConnector;
+    const fromConnector = automation?.connection?.fromConnector;
+    const toConnector = automation?.connection?.toConnector;
 
     if (fromConnector?.title === 'DataGerryInternal' && toConnector?.title !== 'DataGerryInternal') {
       return 'outgoing';
@@ -166,7 +199,7 @@ export class AutomationsListComponent implements OnInit {
     // Show loading state
     this.loaderService.show();
 
-    this.automationsService.getConnection(connectionId).subscribe({
+    this.automationsService?.getConnection(connectionId)?.subscribe({
       next: (connectionData) => {
         // Create updated automation with full connection data
         const updatedAutomation = {
@@ -195,7 +228,7 @@ export class AutomationsListComponent implements OnInit {
         itemType: 'Automation',
         itemName: automation.connection?.title || automation.scheduler?.title || automation.name,
         onConfirm: () => {
-          this.automationsService.deleteAutomation(schedulerId).subscribe({
+          this.automationsService?.deleteAutomation(schedulerId)?.subscribe({
             next: () => { this.toast.success('Automation deleted successfully'); this.loadAutomations(); },
             error: () => this.toast.error('Delete failed')
           });
@@ -208,7 +241,7 @@ export class AutomationsListComponent implements OnInit {
   executeScheduler(schedulerId: any): void {
     this.isExecuting = schedulerId;
 
-    this.automationsService.executeScheduler(schedulerId).subscribe({
+    this.automationsService?.executeScheduler(schedulerId)?.subscribe({
       next: () => {
         this.toast.success('Automation execution started');
         this.isExecuting = null;
@@ -253,7 +286,7 @@ export class AutomationsListComponent implements OnInit {
 
   // Helper method to get last success display data
   getLastSuccessDisplay(automation: any): { date: string, taId: string } {
-    const success = automation.lastExecution?.success;
+    const success = automation?.lastExecution?.success;
     if (!success) {
       return { date: '-', taId: '' };
     }
@@ -266,7 +299,7 @@ export class AutomationsListComponent implements OnInit {
 
   // Helper method to get last fail display data
   getLastFailDisplay(automation: any): { date: string, taId: string } {
-    const fail = automation.lastExecution?.fail;
+    const fail = automation?.lastExecution?.fail;
     if (!fail) {
       return { date: '-', taId: '' };
     }
@@ -279,8 +312,8 @@ export class AutomationsListComponent implements OnInit {
 
   // Helper method to get last duration
   getLastDuration(automation: any): string {
-    const success = automation.lastExecution?.success;
-    const fail = automation.lastExecution?.fail;
+    const success = automation?.lastExecution?.success;
+    const fail = automation?.lastExecution?.fail;
 
     if (success?.duration) {
       return `${success.duration}ms`;

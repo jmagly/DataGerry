@@ -20,15 +20,13 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { FormBuilder, FormGroup, Validators } from '@angular/forms';
 import { combineLatest, Subscription, BehaviorSubject } from 'rxjs';
 import { finalize, map } from 'rxjs/operators';
-import { NgbModal } from '@ng-bootstrap/ng-bootstrap';
-
 import { AutomationsService } from '../../services/automations.service';
 import { ConnectorsService } from '../../../connectors/services/connectors.service';
 import { ToastService } from 'src/app/layout/toast/toast.service';
 import { LoaderService } from 'src/app/core/services/loader.service';
 import { Connector } from '../../../connectors/models/connector.model';
-import { CoreConfirmationModalComponent } from 'src/app/core/components/dialog/confirmation/core-confirmation-modal.component';
 import { AuthService } from 'src/app/modules/auth/services/auth.service';
+import { InternalConnectorHelperService } from '../../../connectors/services/internal-connector-helper.service';
 
 @Component({
   selector: 'app-automation-form',
@@ -53,8 +51,6 @@ export class AutomationFormComponent implements OnInit, OnDestroy {
   initConnection: any = null;
   currentConnection: any = null;
 
-  // Internal connector properties
-  internalConnectorExists: boolean = false;
   internalConnectorDetails: any = null;
 
   private formChangesSubscription?: Subscription;
@@ -72,8 +68,8 @@ export class AutomationFormComponent implements OnInit, OnDestroy {
     private connectorsService: ConnectorsService,
     private toast: ToastService,
     private loaderService: LoaderService,
-    private modalService: NgbModal,
-    private authService: AuthService
+    private authService: AuthService,
+    private internalConnectorHelper: InternalConnectorHelperService
   ) {
   }
 
@@ -83,7 +79,13 @@ export class AutomationFormComponent implements OnInit, OnDestroy {
     this.buildForm();
 
     // First check if internal connector exists
-    this.checkInternalConnector();
+    this.internalConnectorHelper.checkInternalConnector({
+      onExists: () => this.loadConnectorsAndInvokers(),
+      redirectRoute: ['/automations/internal'],
+      description: 'Internal DataGerry connector for automations',
+      cancelRoute: ['/automations'],
+      errorRoute: ['/automations']
+    });
 
     if (this.mode === 'edit') {
       this.id = +this.route.snapshot.paramMap.get('connectorId')!;
@@ -109,17 +111,24 @@ export class AutomationFormComponent implements OnInit, OnDestroy {
       .pipe(finalize(() => this.loaderService.hide()))
       .subscribe({
         next: ([connectors, invokers]) => {
-          this.connectors = connectors || [];
-          // Filter out the internal connector from the list of selectable connectors
-          this.externalConnectors = this.connectors.filter(connector => connector.title !== 'DataGerryInternal');
           this.invokers = invokers || [];
+          this.connectors = this.replaceConnectorInvokers(connectors || [], this.invokers);
+          // Keep the internal connector in the list, but present a friendlier label
+          this.externalConnectors = this.connectors.map(connector =>
+            connector.title === 'DataGerryInternal'
+              ? { ...connector, title: 'Built-in DataGerry' }
+              : connector
+          );
 
           // Set internal connector details from connectors list
           const internalConnector = this.connectors.find(c => c.title === 'DataGerryInternal');
           if (internalConnector) {
             this.internalConnectorDetails = internalConnector;
           } else {
-            this.redirectToInternalConnectorSetup();
+            this.internalConnectorHelper.redirectToInternalConnectorSetup(
+              ['/automations/internal'],
+              'Internal DataGerry connector for automations'
+            );
             return;
           }
 
@@ -147,6 +156,7 @@ export class AutomationFormComponent implements OnInit, OnDestroy {
         }
       });
   }
+
 
   private loadTemplates(): void {
     const sourceId = this.currentSourceConnectorId;
@@ -233,9 +243,9 @@ export class AutomationFormComponent implements OnInit, OnDestroy {
     this.showConnectorField = !!direction;
 
     if (direction === 'outgoing') {
-      this.connectorLabel = 'To Connector';
+      this.connectorLabel = 'Send data to Connector';
     } else if (direction === 'incoming') {
-      this.connectorLabel = 'From Connector';
+      this.connectorLabel = 'Get data from Connector';
     } else {
       this.connectorLabel = '';
     }
@@ -291,71 +301,6 @@ export class AutomationFormComponent implements OnInit, OnDestroy {
     } else {
     }
 
-  }
-
-  // Internal connector methods
-  private checkInternalConnector(): void {
-    this.loaderService.show();
-
-    this.connectorsService.checkConnectorExists('DataGerryInternal')
-      .pipe(finalize(() => this.loaderService.hide()))
-      .subscribe({
-        next: (exists) => {
-          this.internalConnectorExists = exists;
-
-          if (exists) {
-            this.loadConnectorsAndInvokers();
-          } else {
-            this.showInternalConnectorModal();
-          }
-        },
-        error: (error) => {
-          this.toast.error(error?.error?.message);
-          this.internalConnectorExists = false;
-          this.router.navigate(['/automations']);
-        }
-      });
-  }
-
-
-  private showInternalConnectorModal(): void {
-    const modalRef = this.modalService.open(CoreConfirmationModalComponent, {
-      centered: true,
-      backdrop: 'static'
-    });
-
-    modalRef.componentInstance.title = 'Internal Connector Required';
-    modalRef.componentInstance.message = 'Internal connector is not configured. Do you want to configure it now?';
-    modalRef.componentInstance.confirmButtonText = 'Configure';
-    modalRef.componentInstance.cancelButtonText = 'Cancel';
-    modalRef.componentInstance.confirmButtonClass = 'btn-primary';
-
-    modalRef.result.then(
-      (result) => {
-        if (result === 'confirmed') {
-          this.redirectToInternalConnectorSetup();
-        }
-      },
-      (dismissReason) => {
-        // User dismissed the modal (clicked cancel or outside)
-        this.router.navigate(['/automations']);
-      }
-    );
-  }
-
-  private redirectToInternalConnectorSetup(): void {
-    this.router.navigate(['/automations/connectors/internal'], {
-      state: {
-        connectorExists: false, // Internal connector doesn't exist, so we're creating it
-        connector: {
-          title: 'DataGerryInternal',
-          description: 'Internal DataGerry connector for automations',
-          invoker: { name: 'DataGerry' },
-          sslCert: false,
-          timeout: 1000
-        }
-      }
-    });
   }
 
   // Dynamic connector ID methods
@@ -482,7 +427,6 @@ export class AutomationFormComponent implements OnInit, OnDestroy {
   }
 
   onEditorLoad(): void {
-    console.log('OC loaded')
   }
 
   save(): void {
@@ -531,4 +475,31 @@ export class AutomationFormComponent implements OnInit, OnDestroy {
   cancel(): void {
     this.router.navigate(['/automations'], { relativeTo: this.route });
   }
+
+
+    
+  // Replace each connector's invoker with the full invoker object from the invokers list.
+  private replaceConnectorInvokers(connectors: Connector[], invokers: any[]): Connector[] {
+    const invokerMap = new Map<string, any>();
+    invokers.forEach(invoker => {
+      if (invoker?.name) {
+        invokerMap.set(invoker.name, invoker);
+      }
+    });
+
+    return connectors.map((connector: any) => {
+      const invokerName = connector?.invoker?.name ?? connector?.invoker;
+      if (!invokerName) {
+        return connector;
+      }
+
+      const invoker = invokerMap.get(invokerName);
+      if (!invoker) {
+        return connector;
+      }
+
+      return { ...connector, invoker };
+    });
+  }
+
 }

@@ -33,6 +33,7 @@ import { ToastService } from 'src/app/layout/toast/toast.service';
 import { LoaderService } from 'src/app/core/services/loader.service';
 import { Connector } from '../../models/connector.model';
 import { Invoker } from '../../models/invoker.model';
+import { environment } from 'src/environments/environment';
 
 
 @Component({
@@ -44,6 +45,7 @@ import { Invoker } from '../../models/invoker.model';
 export class ConnectorFormComponent implements OnInit, OnDestroy {
   mode: 'create' | 'edit' | 'internal' = 'create';
   id?: number;
+  isCloudMode = environment.cloudMode;
 
   invokers: Invoker[] = [];
   form!: FormGroup;
@@ -62,6 +64,7 @@ export class ConnectorFormComponent implements OnInit, OnDestroy {
   credentialsBlurred = false;
   verifyingPassword = false;
   showPassword = false;
+  showDataGerryPassword = false;
   originalInvokerName: string | null = null;
 
   // Internal connector state
@@ -324,8 +327,12 @@ export class ConnectorFormComponent implements OnInit, OnDestroy {
   
       if (connectorExists) {
         // Fetch actual existing internal connector (for ID + possibly real requestData)
+        this.loaderService.show();
         this.svc.getInternalConnector({})
-          .pipe(takeUntil(this.destroy$))
+          .pipe(
+            finalize(() => this.loaderService.hide()),
+            takeUntil(this.destroy$)
+          )
           .subscribe({
             next: (actual) => {
               this.id = actual?.connectorId;
@@ -395,14 +402,33 @@ export class ConnectorFormComponent implements OnInit, OnDestroy {
   
 
   private buildDataGerryCredentials(): void {
-    const newGroup = this.fb.group({
-      url: ['', Validators.required],
-      username: ['', Validators.required],
-      password: ['', Validators.required]
-    });
+    const newGroup = this.fb.group({});
 
+    // URL: set from environment in cloud mode, otherwise empty string
+    const urlValue = environment.cloudMode 
+      ? `${environment.protocol}://${environment.apiUrl}:${environment.apiPort}`
+      : '';
+    
+    newGroup.addControl('url', new FormControl(urlValue, Validators.required));
+    newGroup.addControl('username', new FormControl('', Validators.required));
+    newGroup.addControl('password', new FormControl('', Validators.required));
+
+    if (environment.cloudMode) {
+      newGroup.addControl('x-api-key', new FormControl('', Validators.required));
+    }
     
     this.form.setControl('requestData', newGroup);
+  }
+
+  getDisplayedRequestDataControlNames(): string[] {
+    const allControls = this.getRequestDataControlNames();
+    
+    // Filter out URL field in internal mode when cloudMode is enabled
+    if (this.mode === 'internal' && environment.cloudMode) {
+      return allControls.filter(controlName => controlName !== 'url');
+    }
+    
+    return allControls;
   }
 
   private getDataGerryInvoker(): Invoker {
@@ -427,8 +453,12 @@ export class ConnectorFormComponent implements OnInit, OnDestroy {
           
           if (exists) {
             // Connector exists - show update button and load connector data
+            this.loaderService.show();
             this.svc.getInternalConnector({})
-              .pipe(takeUntil(this.destroy$))
+              .pipe(
+                finalize(() => this.loaderService.hide()),
+                takeUntil(this.destroy$)
+              )
               .subscribe({
                 next: (connector) => {
                   this.patchForInternal(connector, true);
@@ -462,7 +492,7 @@ export class ConnectorFormComponent implements OnInit, OnDestroy {
     const internalConnectorData = {
       title: 'DataGerryInternal',
       description: 'Internal DATAGerry connector for automations',
-      invoker: { name: 'DataGerry', hint: "This interface provides a basic auth. Read here the api documentation https://docs.datagerry.com/latest/api/rest/" },
+      invoker: { name: environment.cloudMode ? 'DataGerryCloud' : 'DataGerry' , hint: "This interface provides a basic auth. Read here the api documentation https://docs.datagerry.com/latest/api/rest/" },
       sslCert: false,
       timeout: 1000
     };
@@ -551,6 +581,10 @@ export class ConnectorFormComponent implements OnInit, OnDestroy {
     this.showPassword = !this.showPassword;
   }
 
+  toggleDataGerryPasswordVisibility(): void {
+    this.showDataGerryPassword = !this.showDataGerryPassword;
+  }
+
   // Action methods
   private toPayload(): Connector {
     // Use getRawValue() to get all form values including disabled fields
@@ -569,7 +603,9 @@ export class ConnectorFormComponent implements OnInit, OnDestroy {
       invoker: { name: invokerName },
       sslCert: v.sslCert,
       timeout: v.timeout,
-      requestData: v.requestData
+      requestData: this.mode === 'internal' && environment.cloudMode
+        ? { ...v.requestData, url: this.getInternalUrlFromEnvironment() }
+        : v.requestData
     };
   }
 
@@ -657,6 +693,14 @@ export class ConnectorFormComponent implements OnInit, OnDestroy {
 
   cancel(): void {
     this.router.navigate(['../'], { relativeTo: this.route });
+  }
+
+  private getInternalUrlFromEnvironment(): string {
+    if (environment.cloudMode) {
+      return `${environment.protocol}://${environment.apiUrl}`;
+    }
+
+    return this.requestDataGroup?.get('url')?.value ?? '';
   }
 
   

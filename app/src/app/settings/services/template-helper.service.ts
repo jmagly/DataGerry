@@ -38,14 +38,29 @@ export class TemplateHelperService implements OnDestroy {
     return firstValueFrom(this.typeService.getType(typeID).pipe(takeUntil(this.subscriber)));
   }
 
-  public async getObjectTemplateHelperData(typeId: number, prefix: string = '', iteration: number = 3) {
+  public async getObjectTemplateHelperData(typeId: number, prefix: string = '', iteration: number = 3, templateType: string = 'OBJECT') {
     const templateHelperData = [];
+    // Generate Public ID placeholder based on template type
+    let publicIdTemplate: string;
+    if (templateType === 'DEFAULT') {
+      if (prefix) {
+        publicIdTemplate = '{{root.fields' + prefix + '[\'id\']}}';
+      } else {
+        publicIdTemplate = '{{root.public_id}}';
+      }
+    } else {
+      publicIdTemplate = (prefix ? '{{fields' + prefix + '[\'id\']}}' : '{{id}}');
+    }
     templateHelperData.push(({
       label: 'Public ID',
-      templatedata: (prefix ? '{{fields' + prefix + '[\'id\']}}' : '{{id}}')
+      templatedata: publicIdTemplate,
+      name: 'public_id',
+      type: 'public_id'
     }) as TemplateHelpdataElement);
-    await this.typeService.getType(typeId).subscribe({
-      next: async (cmdbTypeObj) => {
+    try {
+      const cmdbTypeObj = await firstValueFrom(
+        this.typeService.getType(typeId).pipe(takeUntil(this.subscriber))
+      );
     
       const multiDataSectionFieldsSet = new Set(
         cmdbTypeObj.render_meta.sections
@@ -65,29 +80,28 @@ export class TemplateHelperService implements OnDestroy {
           const changedPrefix = (prefix ? prefix + '[\'fields\'][\'' + field.name + '\']' : '[\'' + field.name + '\']');
           let subdata;
 
-          if (!isNaN(field.ref_types) && !Array.isArray(field.ref_types)) {
-            await this.getObjectTemplateHelperData(field.ref_types, changedPrefix, iteration - 1).then(data => {
-              subdata = data;
-            });
+          if (!field.ref_types) {
+            subdata = [];
+          } else if (!isNaN(field.ref_types) && !Array.isArray(field.ref_types)) {
+            subdata = await this.getObjectTemplateHelperData(field.ref_types, changedPrefix, iteration - 1, templateType);
           } else if (field.ref_types.length === 1) {
-            await this.getObjectTemplateHelperData(field.ref_types[0], changedPrefix, iteration - 1).then(data => {
-              subdata = data;
-            });
+            subdata = await this.getObjectTemplateHelperData(field.ref_types[0], changedPrefix, iteration - 1, templateType);
           } else {
             subdata = [];
-            await field.ref_types.forEach((type) => {
-              this.getObjectTemplateHelperData(type, changedPrefix, iteration - 1).then(data => {
-                subdata.push(({
-                  label: 'ref_type ' + type,
-                  subdata: data
-                }));
-              });
-            });
+            for (const type of field.ref_types) {
+              const data = await this.getObjectTemplateHelperData(type, changedPrefix, iteration - 1, templateType);
+              subdata.push(({
+                label: 'ref_type ' + type,
+                subdata: data
+              }));
+            }
           }
 
           templateHelperData.push(({
             label: field.label,
-            subdata
+            subdata,
+            name: field.name,
+            type: field.type
           }) as TemplateHelpdataElement);
         } else if (field.type === 'ref-section-field') {
           const refSection = cmdbTypeObj.render_meta.sections.find(s => s.name === field.name.substring(0, field.name.length - 6));
@@ -109,29 +123,84 @@ export class TemplateHelperService implements OnDestroy {
             for (const refFieldName of referenceFieldNames) {
               const refField = referenceType.fields.find(f => f.name === refFieldName);
               if (refField) {
+                let refFieldTemplate: string;
+                if (templateType === 'DEFAULT') {
+                  refFieldTemplate = (changedPrefix ? '{{root.fields' + changedPrefix + '[\'fields\'][\'' + refField.name + '\']}}' : '{{root.fields[\'' + refField.name + '\']}}');
+                } else {
+                  refFieldTemplate = (changedPrefix ? '{{fields' + changedPrefix + '[\'fields\'][\'' + refField.name + '\']}}' : '{{fields[\'' + refField.name + '\']}}');
+                }
                 referenceFields.push(({
                   label: refField.label,
-                  templatedata: (changedPrefix ? '{{fields' + changedPrefix + '[\'fields\'][\'' + refField.name + '\']}}' : '{{fields[\'' + refField.name + '\']}}')
+                  templatedata: refFieldTemplate,
+                  name: refField.name,
+                  type: refField.type
                 }) as TemplateHelpdataElement);
               }
             }
             templateHelperData.push(({
               label: field.label,
-              subdata: referenceFields
+              subdata: referenceFields,
+              name: field.name,
+              type: field.type
             }) as TemplateHelpdataElement);
           });
         } else {
+          // Generate field placeholder based on template type
+          let fieldTemplate: string;
+          if (templateType === 'DEFAULT') {
+            fieldTemplate = (prefix ? '{{root.fields' + prefix + '[\'fields\'][\'' + field.name + '\']}}' : '{{root.fields[\'' + field.name + '\']}}');
+          } else {
+            fieldTemplate = (prefix ? '{{fields' + prefix + '[\'fields\'][\'' + field.name + '\']}}' : '{{fields[\'' + field.name + '\']}}');
+          }
           templateHelperData.push(({
             label: field.label,
-            templatedata: (prefix ? '{{fields' + prefix + '[\'fields\'][\'' + field.name + '\']}}' : '{{fields[\'' + field.name + '\']}}')
+            templatedata: fieldTemplate,
+            name: field.name,
+            type: field.type
           }) as TemplateHelpdataElement);
         }
       }
-    },
-    error: (error) => {
+
+      const multiDataSections = cmdbTypeObj.render_meta.sections
+        .filter(section => section.type === 'multi-data-section');
+
+      for (const section of multiDataSections) {
+        const sectionFields: TemplateHelpdataElement[] = [];
+        for (const fieldName of section.fields || []) {
+          const field = cmdbTypeObj.fields.find(f => f.name === fieldName);
+          if (!field || field.type === 'ref' || field.type === 'ref-section-field') {
+            continue;
+          }
+          let mdsTemplate: string;
+          if (templateType === 'DEFAULT') {
+            mdsTemplate = prefix
+              ? `{{root.fields${prefix}['mds']['${section.name}']['${field.name}']}}`
+              : `{{root.mds['${section.name}']['${field.name}']}}`;
+          } else {
+            mdsTemplate = prefix
+              ? `{{fields${prefix}['mds']['${section.name}']['${field.name}']}}`
+              : `{{mds['${section.name}']['${field.name}']}}`;
+          }
+          sectionFields.push(({
+            label: field.label,
+            templatedata: mdsTemplate,
+            name: field.name,
+            type: field.type
+          }) as TemplateHelpdataElement);
+        }
+
+        if (sectionFields.length > 0) {
+          templateHelperData.push(({
+            label: section.label,
+            subdata: sectionFields,
+            name: section.name,
+            type: 'multi-data-section'
+          }) as TemplateHelpdataElement);
+        }
+      }
+    } catch (error) {
       console.error(error);
-  }}
-    );
+    }
     return templateHelperData;
   }
 

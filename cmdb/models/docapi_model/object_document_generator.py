@@ -1,5 +1,5 @@
 # DATAGERRY - OpenSource Enterprise CMDB
-# Copyright (C) 2025 becon GmbH
+# Copyright (C) 2026 becon GmbH
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -25,7 +25,9 @@ from cmdb.framework.docapi.docapi_template.docapi_template import DocapiTemplate
 from cmdb.models.docapi_model.template_engine import TemplateEngine
 from cmdb.models.docapi_model.pdf_document_type import PdfDocumentType
 from cmdb.models.docapi_model.object_template_data import ObjectTemplateData
+from cmdb.models.docapi_model.default_template_data import DefaultTemplateData
 from cmdb.framework.rendering.render_result import RenderResult
+from cmdb.models.user_model.cmdb_user import CmdbUser
 # -------------------------------------------------------------------------------------------------------------------- #
 
 LOGGER = logging.getLogger(__name__)
@@ -53,7 +55,9 @@ class ObjectDocumentGenerator:
             template: DocapiTemplate,
             cmdb_render_object: RenderResult,
             doctype: PdfDocumentType,
-            objects_manager: ObjectsManager):
+            objects_manager: ObjectsManager,
+            request_user: CmdbUser = None,
+        ) -> None:
         """
         Initializes the ObjectDocumentGenerator
 
@@ -63,10 +67,11 @@ class ObjectDocumentGenerator:
             doctype (PdfDocumentType): The document type that determines the final output format
             objects_manager (ObjectsManager): The manager responsible for CmdbObject operations
         """
-        self.template = template
-        self.cmdb_render_object = cmdb_render_object
-        self.doctype = doctype
-        self.objects_manager = objects_manager
+        self.template: DocapiTemplate = template
+        self.cmdb_render_object: RenderResult = cmdb_render_object
+        self.doctype: PdfDocumentType = doctype
+        self.objects_manager: ObjectsManager = objects_manager
+        self.request_user: CmdbUser = request_user
 
 
     def generate_doc(self) -> BytesIO:
@@ -79,7 +84,22 @@ class ObjectDocumentGenerator:
         Returns:
             BytesIO: A file-like object containing the generated PDF document
         """
-        template_data = ObjectTemplateData(self.cmdb_render_object, self.objects_manager).get_template_data()
+        template_str = self.template.get_template_data()
+
+        if self.template.template_type == "DEFAULT":
+            template_data = DefaultTemplateData(
+                self.cmdb_render_object,
+                template_str,
+                self.request_user
+            ).get_template_data()
+        else:
+            template_data = ObjectTemplateData(
+                self.cmdb_render_object,
+                self.objects_manager,
+                self.request_user
+            ).get_template_data()
+
+        # LOGGER.debug(f"template_data: {template_data}")
 
         rendered_template = TemplateEngine().render_template_string(self.template.get_template_data(), template_data)
 

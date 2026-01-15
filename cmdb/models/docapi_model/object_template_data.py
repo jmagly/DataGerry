@@ -1,5 +1,5 @@
 # DATAGERRY - OpenSource Enterprise CMDB
-# Copyright (C) 2025 becon GmbH
+# Copyright (C) 2026 becon GmbH
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -16,18 +16,20 @@
 """
 Implementation of ObjectTemplateData
 """
-import logging
+from logging import Logger, getLogger
 
-from cmdb.manager import ObjectsManager
+from cmdb.manager.manager_provider_model import ManagerProvider, ManagerType
+from cmdb.manager import ObjectsManager, LocationsManager
 
 from cmdb.models.object_model import CmdbObject
+from cmdb.models.user_model import CmdbUser
 from cmdb.framework.rendering.cmdb_render import CmdbRender
 from cmdb.framework.rendering.render_result import RenderResult
 
 from cmdb.errors.manager.objects_manager import ObjectsManagerGetError
 # -------------------------------------------------------------------------------------------------------------------- #
 
-LOGGER = logging.getLogger(__name__)
+LOGGER: Logger = getLogger(__name__)
 
 # -------------------------------------------------------------------------------------------------------------------- #
 #                                              ObjectTemplateData - CLASS                                              #
@@ -36,7 +38,12 @@ class ObjectTemplateData:
     """
     Prepares and retrieves template data for a given RenderResult
     """
-    def __init__(self, cmdb_render_object: RenderResult, objects_manager: ObjectsManager):
+    def __init__(
+            self,
+            cmdb_render_object: RenderResult,
+            objects_manager: ObjectsManager,
+            request_user: CmdbUser
+    ) -> None:
         """
         Initializes the ObjectTemplateData
 
@@ -44,7 +51,13 @@ class ObjectTemplateData:
             cmdb_render_object (RenderResult): The RenderResult to extract data from
             objects_manager (ObjectsManager): The manager handling CmdbObject
         """
-        self.objects_manager = objects_manager
+        self.objects_manager: ObjectsManager = objects_manager
+        self.request_user: CmdbUser = request_user
+
+        self.locations_manager: LocationsManager = ManagerProvider.get_manager(
+            ManagerType.LOCATIONS, request_user
+        )
+
         self.template_data = self.extract_object_data(cmdb_render_object, 3)
 
 
@@ -69,8 +82,10 @@ class ObjectTemplateData:
         Returns:
             dict: The extracted object data
         """
+        # LOGGER.debug(f"cmdb_render_object.object_information: {cmdb_render_object.object_information}")
         data = {
             "id": cmdb_render_object.object_information.get("object_id"),
+            "public_id": cmdb_render_object.object_information.get("object_id"),
             "fields": {}
         }
 
@@ -83,7 +98,18 @@ class ObjectTemplateData:
                 continue
 
             try:
-                if field_type in ("ref", "location") and field_value and depth > 0:
+                if field_name == "dg_location" and field_value:
+                    try:
+                        location = self.locations_manager.get_location(field_value)
+                        data["fields"][field_name] = location.get("name")
+                    except Exception as err:
+                        LOGGER.error(
+                            "Failed to resolve location %s for field dg_location: %s",
+                            field_value,
+                            err,
+                        )
+                        data["fields"][field_name] = None
+                elif field_type in ("ref", "location") and field_value and depth > 0:
                     # resolve type
                     related_object = self.objects_manager.get_object(field_value)
                     related_object = CmdbObject.from_data(related_object)
@@ -102,5 +128,38 @@ class ObjectTemplateData:
                 LOGGER.error("Failed to retrieve object for field '%s'. Skipping.", field_name)
             except Exception as err:
                 LOGGER.error("Exception processing field '%s': %s", field_name, err)
+
+        # ------------------------------------------------------------
+        # Multi Data Sections (MDS)
+        # ------------------------------------------------------------
+        mds_result = {}
+
+        for section in cmdb_render_object.multi_data_sections or []:
+            section_id = section.get("section_id")
+            if not section_id:
+                continue
+
+            aggregated: dict[str, list] = {}
+
+            for entry in section.get("values", []):
+                for field in entry.get("data", []):
+                    name = field.get("name")
+                    value = field.get("value")
+
+                    if name is None:
+                        continue
+
+                    aggregated.setdefault(name, []).append(value)
+
+            # convert lists to comma-separated strings
+            mds_result[section_id] = {
+                field_name: ", ".join(
+                    "" if v is None else str(v) for v in values
+                )
+                for field_name, values in aggregated.items()
+            }
+
+        if mds_result:
+            data["mds"] = mds_result
 
         return data
